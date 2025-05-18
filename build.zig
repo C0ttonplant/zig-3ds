@@ -5,22 +5,32 @@ const emulator = "citra";
 const flags = .{"-lctru"};
 const devkitpro = "/opt/devkitpro";
 
-pub fn build(b: *std.build.Builder) void {
-    const mode = b.standardReleaseOptions();
-
-    const obj = b.addObject("zig-3ds", "src/main.zig");
-    obj.setOutputDir("zig-out");
-    obj.linkLibC();
-    obj.setLibCFile(std.build.FileSource{ .path = "libc.txt" });
-    obj.addIncludeDir(devkitpro ++ "/libctru/include");
-    obj.addIncludeDir(devkitpro ++ "/portlibs/3ds/include");
-    obj.setTarget(.{
+pub fn build(b: *std.Build) void {
+    // const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const resolved = b.standardTargetOptions(.{.default_target = .{ 
         .cpu_arch = .arm,
         .os_tag = .freestanding,
         .abi = .eabihf,
         .cpu_model = .{ .explicit = &std.Target.arm.cpu.mpcore },
+    }});
+
+    const exe = b.addExecutable(.{
+        .name = "3ds-zig",
+        .root_source_file = b.path("src/main.zig"),
+        .target = resolved,
+        .optimize = optimize,
     });
-    obj.setBuildMode(mode);
+
+    exe.linkLibC();
+
+    exe.setLibCFile(b.path("libc.txt"));
+
+    exe.addIncludePath(.{ .cwd_relative =  devkitpro ++ "/libctru/include"});
+    exe.addIncludePath(.{ .cwd_relative =  devkitpro ++ "/portlibs/3ds/include"});
+
+
+    // obj.setBuildMode(mode);
 
     const extension = if (builtin.target.os.tag == .windows) ".exe" else "";
     const elf = b.addSystemCommand(&(.{
@@ -45,14 +55,18 @@ pub fn build(b: *std.build.Builder) void {
         "zig-out/zig-3ds.elf",
         "zig-out/zig-3ds.3dsx",
     });
-    dsx.stdout_action = .ignore;
+    // dsx.stdout_action = .ignore;
+
+    b.installArtifact(exe);
+    // elf.create(b, "elf");
+    // dsx.create(b, "dsx");
 
     b.default_step.dependOn(&dsx.step);
     dsx.step.dependOn(&elf.step);
-    elf.step.dependOn(&obj.step);
+    elf.step.dependOn(&exe.step);
 
     const run_step = b.step("run", "Run in Citra");
     const citra = b.addSystemCommand(&.{ emulator, "zig-out/zig-3ds.3dsx" });
-    run_step.dependOn(&dsx.step);
+    // run_step.dependOn(&dsx.step);
     run_step.dependOn(&citra.step);
 }
