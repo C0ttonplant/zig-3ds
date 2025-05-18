@@ -8,7 +8,7 @@ export fn main(_: c_int, _: [*]const [*:0]const u8) void {
 
     _ = c.printf("Hello, Zig");
     while (c.aptMainLoop()) {
-        system.gspWaitForVBlank(); // TODO: This should be c.gspWaitForVBlank();
+        c.gspWaitForVBlank();
         c.gfxSwapBuffers();
     }
 }
