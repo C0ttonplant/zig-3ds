@@ -1,58 +1,65 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const emulator = "citra";
-const flags = .{"-lctru"};
-const devkitpro = "/opt/devkitpro";
 
-pub fn build(b: *std.build.Builder) void {
-    const mode = b.standardReleaseOptions();
+const name = "3ds-zig";
+const extension = if (builtin.target.os.tag == .windows) ".exe" else "";
 
-    const obj = b.addObject("zig-3ds", "src/main.zig");
-    obj.setOutputDir("zig-out");
-    obj.linkLibC();
-    obj.setLibCFile(std.build.FileSource{ .path = "libc.txt" });
-    obj.addIncludeDir(devkitpro ++ "/libctru/include");
-    obj.addIncludeDir(devkitpro ++ "/portlibs/3ds/include");
-    obj.setTarget(.{
+pub fn build(b: *std.Build) !void {
+    const wf = b.addWriteFiles();
+
+    const optimize = b.standardOptimizeOption(.{});
+    const resolved = b.standardTargetOptions(.{.default_target = .{ 
         .cpu_arch = .arm,
         .os_tag = .freestanding,
         .abi = .eabihf,
         .cpu_model = .{ .explicit = &std.Target.arm.cpu.mpcore },
+    }});
+    
+    const exe = b.addObject(.{
+        .name = name,
+        .root_source_file = b.path("src/main.zig"),
+        .target = resolved,
+        .optimize = optimize,
     });
-    obj.setBuildMode(mode);
 
-    const extension = if (builtin.target.os.tag == .windows) ".exe" else "";
-    const elf = b.addSystemCommand(&(.{
-        devkitpro ++ "/devkitARM/bin/arm-none-eabi-gcc" ++ extension,
-        "-g",
-        "-march=armv6k",
-        "-mtune=mpcore",
-        "-mfloat-abi=hard",
-        "-mtp=soft",
-        "-Wl,-Map,zig-out/zig-3ds.map",
-        "-specs=" ++ devkitpro ++ "/devkitARM/arm-none-eabi/lib/3dsx.specs",
-        "zig-out/zig-3ds.o",
-        "-L" ++ devkitpro ++ "/libctru/lib",
-        "-L" ++ devkitpro ++ "/portlibs/3ds/lib",
-    } ++ flags ++ .{
-        "-o",
-        "zig-out/zig-3ds.elf",
-    }));
+    exe.setLibCFile(b.path("libc.txt"));
+    exe.linkLibC();
 
-    const dsx = b.addSystemCommand(&.{
-        devkitpro ++ "/tools/bin/3dsxtool" ++ extension,
-        "zig-out/zig-3ds.elf",
-        "zig-out/zig-3ds.3dsx",
-    });
-    dsx.stdout_action = .ignore;
+    exe.addIncludePath(.{ .src_path = .{ .owner = b, .sub_path = "/opt/devkitpro/libctru/include" } });
+    exe.addIncludePath(.{ .src_path = .{ .owner = b, .sub_path = "/opt/devkitpro/devkitARM/arm-none-eabi/include" } });
 
-    b.default_step.dependOn(&dsx.step);
-    dsx.step.dependOn(&elf.step);
-    elf.step.dependOn(&obj.step);
+    // generate .elf
+    const elf = b.addSystemCommand(&(.{ "/opt/devkitpro/devkitARM/bin/arm-none-eabi-gcc" ++ extension }));
+    elf.setCwd(wf.getDirectory());
+    elf.addArgs(&.{ "-specs=3dsx.specs", "-g", "-march=armv6k", "-mtune=mpcore", "-mfloat-abi=hard", "-mtp=soft" });
+    _ = elf.addPrefixedOutputFileArg("-Wl,-Map,", name++".map");
+    elf.addArtifactArg(exe);
+    elf.addArgs(&.{ "-L/opt/devkitpro/libctru/lib", "-lctru" });
+    const out_elf = elf.addPrefixedOutputFileArg("-o", name++".elf");
 
-    const run_step = b.step("run", "Run in Citra");
-    const citra = b.addSystemCommand(&.{ emulator, "zig-out/zig-3ds.3dsx" });
-    run_step.dependOn(&dsx.step);
-    run_step.dependOn(&citra.step);
+    // generate .sdmh
+    const smdh = b.addSystemCommand(&.{"/opt/devkitpro/tools/bin/smdhtool"});
+    smdh.setCwd(wf.getDirectory());
+    smdh.addArgs(&.{ "--create", name, "Built with Zig, devkitARM, and libctru", "cottonplant", getCWD("/icon.png")});
+    const out_smdh = smdh.addOutputFileArg(name++".smdh");
+
+    // generate final .3dsx
+    const dsx = b.addSystemCommand(&.{"/opt/devkitpro/tools/bin/3dsxtool" ++ extension});
+    dsx.setCwd(wf.getDirectory());
+    dsx.addFileArg(out_elf);
+    const out_dsx = dsx.addOutputFileArg(name++".3dsx");
+    dsx.addPrefixedFileArg("--smdh=", out_smdh);
+
+    // install
+    const install_3dsx = b.addInstallFileWithDir(out_dsx, .prefix, "bin/"++name++".3dsx");
+    b.getInstallStep().dependOn(&install_3dsx.step);
+}
+
+/// TODO: is there a method that does not need an absolute path
+fn getCWD(file: []const u8) []const u8 {
+    
+    const dir = std.posix.getenv("PWD") orelse "";
+
+    return std.mem.concat(std.heap.page_allocator, u8, &.{dir, file}) catch "";
 }
